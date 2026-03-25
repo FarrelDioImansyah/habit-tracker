@@ -62,11 +62,15 @@ class BadHabitRepository {
 
   // Ambil sesi yang sedang berjalan
   Future<BadHabitSession?> getCurrentSession(String habitId) async {
+    final userId = _client.auth.currentUser!.id;
     final res = await _client
         .from('bad_habit_sessions')
         .select()
         .eq('habit_id', habitId)
+        .eq('user_id', userId)
         .eq('is_current', true)
+        .order('started_at', ascending: false)
+        .limit(1)
         .maybeSingle();
 
     if (res == null) return null;
@@ -90,24 +94,31 @@ class BadHabitRepository {
   Future<void> recordRelapse(
     String habitId, {
     String? note,
-  }) async {
+  }) 
+  async {
     final userId = _client.auth.currentUser!.id;
-    final now = DateTime.now();
-
-    // 1. Ambil sesi yang sedang berjalan
+    final now = DateTime.now().toUtc(); // 🔥 FIX
     final currentSession = await getCurrentSession(habitId);
     if (currentSession == null) return;
 
-    final durationDays = now.difference(currentSession.startedAt).inDays;
+    final durationDays =
+        now.difference(currentSession.startedAt).inDays;
 
-    // 2. Tutup sesi lama
+    // 🔥 1. matikan semua session aktif dulu
+    await _client
+        .from('bad_habit_sessions')
+        .update({'is_current': false})
+        .eq('habit_id', habitId)
+        .eq('user_id', userId)
+        .eq('is_current', true);
+
+    // 🔥 2. update session lama (detail)
     await _client.from('bad_habit_sessions').update({
       'ended_at': now.toIso8601String(),
       'duration_days': durationDays,
-      'is_current': false,
     }).eq('id', currentSession.id);
 
-    // 3. Simpan relapse (histori tidak dihapus!)
+    // 🔥 3. simpan relapse
     await _client.from('relapses').insert({
       'id': _uuid.v4(),
       'habit_id': habitId,
@@ -117,7 +128,7 @@ class BadHabitRepository {
       'previous_duration_days': durationDays,
     });
 
-    // 4. Mulai sesi baru dari 0
+    // 🔥 4. buat session baru (0)
     await _startNewSession(habitId, userId);
   }
   Future<void> updateBadHabit({
@@ -145,7 +156,7 @@ class BadHabitRepository {
       'id': _uuid.v4(),
       'habit_id': habitId,
       'user_id': userId,
-      'started_at': (startedAt ?? DateTime.now()).toIso8601String(),
+      'started_at': (startedAt ?? DateTime.now().toUtc()).toIso8601String(),
       'is_current': true,
     });
   }

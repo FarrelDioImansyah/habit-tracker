@@ -155,7 +155,7 @@ class BadHabitSession {
 
   // Hitung durasi sesi saat ini secara real-time
   Duration get currentDuration {
-    final end = endedAt ?? DateTime.now();
+    final end = endedAt ?? DateTime.now().toUtc(); // ✅ FIX
     return end.difference(startedAt);
   }
 
@@ -168,9 +168,9 @@ class BadHabitSession {
       id: json['id'] as String,
       habitId: json['habit_id'] as String,
       userId: json['user_id'] as String,
-      startedAt: DateTime.parse(json['started_at'] as String),
+      startedAt: DateTime.parse(json['started_at'] as String).toUtc(),
       endedAt: json['ended_at'] != null
-          ? DateTime.parse(json['ended_at'] as String)
+          ? DateTime.parse(json['ended_at'] as String).toUtc()
           : null,
       durationDays: json['duration_days'] as int?,
       isCurrent: json['is_current'] as bool? ?? true,

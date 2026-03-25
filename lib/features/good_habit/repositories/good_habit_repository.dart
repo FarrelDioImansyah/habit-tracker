@@ -150,11 +150,10 @@ class GoodHabitRepository {
   // Cek apakah sudah check-in hari ini
   Future<bool> isCheckedInToday(String habitId) async {
     final userId = _client.auth.currentUser!.id;
-    final today = DateTime.now();
-    final startOfDay =
-        DateTime(today.year, today.month, today.day).toIso8601String();
-    final endOfDay =
-        DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+    final now = DateTime.now().toUtc();
+
+      final startOfDay = DateTime.utc(now.year, now.month, now.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
 
     final res = await _client
         .from('habit_logs')

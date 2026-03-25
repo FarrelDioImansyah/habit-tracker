@@ -6,6 +6,34 @@ import '../../../features/bad_habit/repositories/bad_habit_repository.dart';
 import '../../../shared/models/habit_model.dart';
 import '../../../shared/widgets/app_icons.dart';
 
+// FIX BUG 2: Provider.family untuk stats per habit
+// Data di-fetch sekali lalu di-cache, tidak refetch tiap rebuild
+final goodHabitStatsProvider = FutureProvider.family<
+    Map<String, int>, String>((ref, habitId) async {
+  final repo = ref.watch(goodHabitRepositoryProvider);
+  final streak = await repo.getCurrentStreak(habitId);
+  final longest = await repo.getLongestStreak(habitId);
+  final logs = await repo.getLogs(habitId);
+  return {
+    'streak': streak,
+    'longest': longest,
+    'total': logs.length,
+  };
+});
+
+final badHabitStatsProvider = FutureProvider.family<
+    Map<String, int>, String>((ref, habitId) async {
+  final repo = ref.watch(badHabitRepositoryProvider);
+  final session = await repo.getCurrentSession(habitId);
+  final best = await repo.getBestRecord(habitId);
+  final total = await repo.getTotalRelapses(habitId);
+  return {
+    'current': session?.currentDays ?? 0,
+    'best': best,
+    'relapses': total,
+  };
+});
+
 class StatsScreen extends ConsumerWidget {
   const StatsScreen({super.key});
 
@@ -75,49 +103,22 @@ class _GoodHabitStats extends ConsumerWidget {
           itemBuilder: (_, i) => _GoodHabitStatCard(habit: habits[i]),
         );
       },
-      loading: () =>
-          const Center(child: CircularProgressIndicator()),
+      loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
     );
   }
 }
 
-class _GoodHabitStatCard extends ConsumerStatefulWidget {
+class _GoodHabitStatCard extends ConsumerWidget {
   final HabitModel habit;
-  const _GoodHabitStatCard({required this.habit});
+  const _GoodHabitStatCard({super.key, required this.habit});
 
   @override
-  ConsumerState<_GoodHabitStatCard> createState() =>
-      _GoodHabitStatCardState();
-}
-
-class _GoodHabitStatCardState extends ConsumerState<_GoodHabitStatCard> {
-  int _streak = 0;
-  int _longest = 0;
-  int _totalLogs = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final repo = ref.read(goodHabitRepositoryProvider);
-    final streak = await repo.getCurrentStreak(widget.habit.id);
-    final longest = await repo.getLongestStreak(widget.habit.id);
-    final logs = await repo.getLogs(widget.habit.id);
-    if (mounted) setState(() {
-      _streak = streak;
-      _longest = longest;
-      _totalLogs = logs.length;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final color = widget.habit.color;
-    final cs = Theme.of(context).colorScheme;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final color = habit.color;
+    // FIX BUG 2: watch provider.family → data langsung ada saat tersedia
+    // tidak perlu setState, tidak ada delay tampil 0 dulu
+    final statsAsync = ref.watch(goodHabitStatsProvider(habit.id));
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -128,38 +129,45 @@ class _GoodHabitStatCardState extends ConsumerState<_GoodHabitStatCard> {
           children: [
             Row(
               children: [
-                EmojiBox(emoji: widget.habit.icon, color: color, size: 40),
+                EmojiBox(emoji: habit.icon, color: color, size: 40),
                 const SizedBox(width: 10),
-                Text(widget.habit.name,
+                Text(habit.name,
                     style: const TextStyle(
                         fontWeight: FontWeight.w700, fontSize: 15)),
               ],
             ),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.local_fire_department_rounded,
-                  iconColor: Colors.orange,
-                  label: 'Streak',
-                  value: '$_streak hari',
-                )),
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.emoji_events_rounded,
-                  iconColor: Colors.amber,
-                  label: 'Terpanjang',
-                  value: '$_longest hari',
-                )),
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.check_rounded,
-                  iconColor: color,
-                  label: 'Total',
-                  value: '$_totalLogs kali',
-                )),
-              ],
+            statsAsync.when(
+              // FIX: tampilkan data langsung saat sudah siap
+              data: (stats) => Row(
+                children: [
+                  Expanded(
+                      child: _MiniStat(
+                    icon: Icons.local_fire_department_rounded,
+                    iconColor: Colors.orange,
+                    label: 'Streak',
+                    value: '${stats['streak']} hari',
+                  )),
+                  Expanded(
+                      child: _MiniStat(
+                    icon: Icons.emoji_events_rounded,
+                    iconColor: Colors.amber,
+                    label: 'Terpanjang',
+                    value: '${stats['longest']} hari',
+                  )),
+                  Expanded(
+                      child: _MiniStat(
+                    icon: Icons.check_rounded,
+                    iconColor: color,
+                    label: 'Total',
+                    value: '${stats['total']} kali',
+                  )),
+                ],
+              ),
+              // FIX BUG 2: saat loading tampilkan skeleton, BUKAN angka 0
+              loading: () => const _StatsSkeleton(),
+              error: (e, _) =>
+                  Text('Error: $e', style: const TextStyle(color: Colors.red)),
             ),
           ],
         ),
@@ -198,48 +206,21 @@ class _BadHabitStats extends ConsumerWidget {
           itemBuilder: (_, i) => _BadHabitStatCard(habit: habits[i]),
         );
       },
-      loading: () =>
-          const Center(child: CircularProgressIndicator()),
+      loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
     );
   }
 }
 
-class _BadHabitStatCard extends ConsumerStatefulWidget {
+class _BadHabitStatCard extends ConsumerWidget {
   final HabitModel habit;
-  const _BadHabitStatCard({required this.habit});
+  const _BadHabitStatCard({super.key, required this.habit});
 
   @override
-  ConsumerState<_BadHabitStatCard> createState() =>
-      _BadHabitStatCardState();
-}
-
-class _BadHabitStatCardState extends ConsumerState<_BadHabitStatCard> {
-  int _currentDays = 0;
-  int _best = 0;
-  int _totalRelapses = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final repo = ref.read(badHabitRepositoryProvider);
-    final session = await repo.getCurrentSession(widget.habit.id);
-    final best = await repo.getBestRecord(widget.habit.id);
-    final total = await repo.getTotalRelapses(widget.habit.id);
-    if (mounted) setState(() {
-      _currentDays = session?.currentDays ?? 0;
-      _best = best;
-      _totalRelapses = total;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final color = widget.habit.color;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final color = habit.color;
+    // FIX BUG 2: sama seperti good habit, pakai provider.family
+    final statsAsync = ref.watch(badHabitStatsProvider(habit.id));
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -250,49 +231,61 @@ class _BadHabitStatCardState extends ConsumerState<_BadHabitStatCard> {
           children: [
             Row(
               children: [
-                EmojiBox(emoji: widget.habit.icon, color: color, size: 40),
+                EmojiBox(emoji: habit.icon, color: color, size: 40),
                 const SizedBox(width: 10),
-                Text(widget.habit.name,
+                Text(habit.name,
                     style: const TextStyle(
                         fontWeight: FontWeight.w700, fontSize: 15)),
               ],
             ),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.timer_outlined,
-                  iconColor: color,
-                  label: 'Sekarang',
-                  value: '$_currentDays hari',
-                )),
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.emoji_events_rounded,
-                  iconColor: Colors.amber,
-                  label: 'Rekor',
-                  value: '$_best hari',
-                )),
-                Expanded(
-                    child: _MiniStat(
-                  icon: Icons.refresh_rounded,
-                  iconColor: Colors.red,
-                  label: 'Relapse',
-                  value: '$_totalRelapses kali',
-                )),
-              ],
+            statsAsync.when(
+              data: (stats) {
+                final currentDays = stats['current']!;
+                return Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                            child: _MiniStat(
+                          icon: Icons.timer_outlined,
+                          iconColor: color,
+                          label: 'Sekarang',
+                          value: '$currentDays hari',
+                        )),
+                        Expanded(
+                            child: _MiniStat(
+                          icon: Icons.emoji_events_rounded,
+                          iconColor: Colors.amber,
+                          label: 'Rekor',
+                          value: '${stats['best']} hari',
+                        )),
+                        Expanded(
+                            child: _MiniStat(
+                          icon: Icons.refresh_rounded,
+                          iconColor: Colors.red,
+                          label: 'Relapse',
+                          value: '${stats['relapses']} kali',
+                        )),
+                      ],
+                    ),
+                    if (currentDays > 0) ...[
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        children: _getBadges(currentDays, color),
+                      ),
+                    ],
+                  ],
+                );
+              },
+              // FIX BUG 2: skeleton bukan 0
+              loading: () => const _StatsSkeleton(),
+              error: (e, _) =>
+                  Text('Error: $e', style: const TextStyle(color: Colors.red)),
             ),
-            // Milestone badges
-            if (_currentDays > 0) ...[
-              const SizedBox(height: 12),
-              const Divider(height: 1),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                children: _getBadges(_currentDays, color),
-              ),
-            ],
           ],
         ),
       ),
@@ -318,12 +311,50 @@ class _BadHabitStatCardState extends ConsumerState<_BadHabitStatCard> {
                       fontSize: 11,
                       color: color,
                       fontWeight: FontWeight.w600)),
-              backgroundColor: color.withOpacity(0.1),
-              side: BorderSide(color: color.withOpacity(0.3)),
+              backgroundColor: color.withValues(alpha: 0.1),
+              side: BorderSide(color: color.withValues(alpha: 0.3)),
               padding: EdgeInsets.zero,
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ))
         .toList();
+  }
+}
+
+// ── SKELETON LOADING ─────────────────────────────────────────
+// FIX BUG 2: tampil saat data belum siap, bukan angka 0
+
+class _StatsSkeleton extends StatelessWidget {
+  const _StatsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final base =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08);
+    return Row(
+      children: List.generate(
+        3,
+        (_) => Expanded(
+          child: Column(
+            children: [
+              Container(
+                  width: 20, height: 20, decoration: BoxDecoration(color: base, shape: BoxShape.circle)),
+              const SizedBox(height: 6),
+              Container(
+                  width: 44,
+                  height: 14,
+                  decoration: BoxDecoration(
+                      color: base, borderRadius: BorderRadius.circular(4))),
+              const SizedBox(height: 4),
+              Container(
+                  width: 32,
+                  height: 10,
+                  decoration: BoxDecoration(
+                      color: base, borderRadius: BorderRadius.circular(4))),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -352,7 +383,8 @@ class _MiniStat extends StatelessWidget {
         Text(label,
             style: TextStyle(
                 fontSize: 11,
-                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                color:
+                    Theme.of(context).colorScheme.onSurfaceVariant)),
       ],
     );
   }

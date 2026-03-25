@@ -8,6 +8,20 @@ import '../../../features/good_habit/repositories/good_habit_repository.dart';
 import '../../../features/bad_habit/repositories/bad_habit_repository.dart';
 import '../../../shared/models/habit_model.dart';
 import '../../../shared/widgets/app_icons.dart';
+import 'dart:async';
+
+// ── FIX BUG 1 & 3 ────────────────────────────────────────────
+// Provider terpisah per habit_id untuk check-in status
+// Dengan family, setiap habitId punya provider sendiri → tidak bocor antar habit
+final checkedTodayProvider =
+    FutureProvider.family<bool, String>((ref, habitId) {
+  return ref.watch(goodHabitRepositoryProvider).isCheckedInToday(habitId);
+});
+
+final currentStreakProvider =
+    FutureProvider.family<int, String>((ref, habitId) {
+  return ref.watch(goodHabitRepositoryProvider).getCurrentStreak(habitId);
+});
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -18,11 +32,12 @@ class HomeScreen extends ConsumerWidget {
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: CustomScrollView(
+          physics: const ClampingScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: _Header()),
             SliverToBoxAdapter(child: _GoodHabitSection()),
             SliverToBoxAdapter(child: _BadHabitSection()),
-            const SliverToBoxAdapter(child: SizedBox(height: 60)),
+            const SliverToBoxAdapter(child: SizedBox(height: 100)),
           ],
         ),
       ),
@@ -42,8 +57,7 @@ class _Header extends ConsumerWidget {
         : now.hour < 17
             ? 'Selamat siang'
             : 'Selamat malam';
-    final dateStr =
-        DateFormat('EEEE, d MMMM yyyy').format(now);
+    final dateStr = DateFormat('EEEE, d MMMM yyyy').format(now);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
@@ -55,8 +69,9 @@ class _Header extends ConsumerWidget {
               children: [
                 Text(greeting,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onSurfaceVariant)),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant)),
                 Text('Ayo semangat! 💪',
                     style: Theme.of(context)
                         .textTheme
@@ -64,12 +79,12 @@ class _Header extends ConsumerWidget {
                         ?.copyWith(fontWeight: FontWeight.w800)),
                 Text(dateStr,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onSurfaceVariant)),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant)),
               ],
             ),
           ),
-          // Progress ring
           goodAsync.when(
             data: (habits) => _ProgressRing(habits: habits),
             loading: () => const SizedBox(width: 56, height: 56),
@@ -88,8 +103,15 @@ class _ProgressRing extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (habits.isEmpty) return const SizedBox(width: 56, height: 56);
+
     // Hitung berapa yang sudah check-in hari ini
-    // Untuk simplisitas kita tampilkan jumlah habit saja dulu
+    int doneCount = 0;
+    for (final h in habits) {
+      final checked = ref.watch(checkedTodayProvider(h.id));
+      if (checked.value == true) doneCount++;
+    }
+    final progress = habits.isEmpty ? 0.0 : doneCount / habits.length;
+
     return SizedBox(
       width: 56,
       height: 56,
@@ -97,7 +119,7 @@ class _ProgressRing extends ConsumerWidget {
         alignment: Alignment.center,
         children: [
           CircularProgressIndicator(
-            value: habits.isEmpty ? 0 : 0.0,
+            value: progress,
             strokeWidth: 5,
             backgroundColor:
                 Theme.of(context).colorScheme.surfaceVariant,
@@ -107,17 +129,17 @@ class _ProgressRing extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                '${habits.length}',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800),
+                '$doneCount/${habits.length}',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w800, fontSize: 11),
               ),
               Text(
-                'habit',
+                'selesai',
                 style: TextStyle(
-                    fontSize: 9,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    fontSize: 8,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant),
               ),
             ],
           ),
@@ -151,8 +173,11 @@ class _GoodHabitSection extends ConsumerWidget {
                   onTap: () => context.push(AppRoutes.addGoodHabit),
                 )
               : Column(
+                  // FIX BUG 1: key unik per habit.id
+                  // Flutter paksa recreate widget saat habit baru ditambah
+                  // sehingga state _checked tidak bocor dari widget lama
                   children: habits
-                      .map((h) => _GoodHabitCard(habit: h ))
+                      .map((h) => _GoodHabitCard(key: ValueKey(h.id), habit: h))
                       .toList(),
                 ),
           loading: () => const Padding(
@@ -166,90 +191,65 @@ class _GoodHabitSection extends ConsumerWidget {
   }
 }
 
-class _GoodHabitCard extends ConsumerStatefulWidget {
+class _GoodHabitCard extends ConsumerWidget {
   final HabitModel habit;
-  const _GoodHabitCard({required this.habit});
+  // FIX: Ubah dari StatefulWidget ke ConsumerWidget
+  // State _checked sekarang dari provider.family → tidak bocor antar habit
+  const _GoodHabitCard({super.key, required this.habit});
 
   @override
-  ConsumerState<_GoodHabitCard> createState() => _GoodHabitCardState();
-}
-
-class _GoodHabitCardState extends ConsumerState<_GoodHabitCard> {
-  bool _checked = false;
-  int _streak = 0;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final repo = ref.read(goodHabitRepositoryProvider);
-    final checked = await repo.isCheckedInToday(widget.habit.id);
-    final streak = await repo.getCurrentStreak(widget.habit.id);
-    if (mounted) setState(() {
-      _checked = checked;
-      _streak = streak;
-      _loading = false;
-    });
-  }
-
-  Future<void> _toggle() async {
-    final repo = ref.read(goodHabitRepositoryProvider);
-    setState(() => _loading = true);
-    if (_checked) {
-      await repo.undoCheckIn(widget.habit.id);
-    } else {
-      await repo.checkIn(widget.habit.id);
-    }
-    await _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final color = widget.habit.color;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final color = habit.color;
     final cs = Theme.of(context).colorScheme;
+
+    // FIX BUG 1 & 3: watch provider.family per habitId
+    // Otomatis rebuild saat invalidate dipanggil (setelah kembali dari detail)
+    final checkedAsync = ref.watch(checkedTodayProvider(habit.id));
+    final streakAsync = ref.watch(currentStreakProvider(habit.id));
+
+    final checked = checkedAsync.value ?? false;
+    final streak = streakAsync.value ?? 0;
+    final loading = checkedAsync.isLoading;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Material(
-        color: _checked ? color.withOpacity(0.08) : cs.surface,
+        color: checked ? color.withValues(alpha: 0.08) : cs.surface,
         borderRadius: BorderRadius.circular(16),
         elevation: 0,
         child: InkWell(
-          onTap: () {
-            context.push('/good-habit/${widget.habit.id}');
+          onTap: () async {
+            // FIX BUG 3: navigasi ke detail lalu invalidate saat kembali
+            await context.push('/good-habit/${habit.id}');
+            // Invalidate setelah pop agar langsung refresh status centang
+            ref.invalidate(checkedTodayProvider(habit.id));
+            ref.invalidate(currentStreakProvider(habit.id));
+            ref.invalidate(goodHabitsProvider);
           },
           onLongPress: () {
-              context.push(
-              '/edit-good-habit',
-              extra: widget.habit,
-            );
+            context.push('/edit-good-habit', extra: habit);
           },
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(
               children: [
-                // Icon
-                EmojiBox(emoji: widget.habit.icon, color: color, size: 46),
+                EmojiBox(emoji: habit.icon, color: color, size: 46),
                 const SizedBox(width: 12),
-                // Info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.habit.name,
+                        habit.name,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 15,
-                          decoration: _checked
+                          // FIX BUG 3: decoration langsung dari checked provider
+                          decoration: checked
                               ? TextDecoration.lineThrough
                               : null,
-                          color: _checked
+                          color: checked
                               ? cs.onSurfaceVariant
                               : cs.onSurface,
                         ),
@@ -260,37 +260,68 @@ class _GoodHabitCardState extends ConsumerState<_GoodHabitCard> {
                           Icon(Icons.local_fire_department_rounded,
                               size: 14, color: Colors.orange),
                           const SizedBox(width: 3),
-                          Text(
-                            '$_streak hari streak',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: cs.onSurfaceVariant,
-                            ),
-                          ),
+                          // Tampilkan loading kecil jika streak belum siap
+                          streakAsync.isLoading
+                              ? SizedBox(
+                                  width: 40,
+                                  height: 10,
+                                  child: LinearProgressIndicator(
+                                    color: color.withValues(alpha: 0.4),
+                                    backgroundColor:
+                                        color.withValues(alpha: 0.1),
+                                  ),
+                                )
+                              : Text(
+                                  '$streak hari streak',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
                         ],
                       ),
                     ],
                   ),
                 ),
-                // Check button
+                // Tombol centang
                 GestureDetector(
-                  onTap: _loading ? null : _toggle,
+                  onTap: loading
+                      ? null
+                      : () async {
+                          final repo =
+                              ref.read(goodHabitRepositoryProvider);
+                          if (checked) {
+                            await repo.undoCheckIn(habit.id);
+                          } else {
+                            await repo.checkIn(habit.id);
+                          }
+                          // Invalidate provider → otomatis rebuild
+                          ref.invalidate(checkedTodayProvider(habit.id));
+                          ref.invalidate(currentStreakProvider(habit.id));
+                          ref.invalidate(goodHabitsProvider);
+                        },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: _checked ? color : Colors.transparent,
+                      color: checked ? color : Colors.transparent,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: color, width: 2),
                     ),
-                    child: Icon(
-                      Icons.check_rounded,
-                      color: _checked ? Colors.white : color,
-                      size: 22,
-                    ),
+                    child: loading
+                        ? Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: color),
+                          )
+                        : Icon(
+                            Icons.check_rounded,
+                            color: checked ? Colors.white : color,
+                            size: 22,
+                          ),
                   ),
-                ),              
+                ),
               ],
             ),
           ),
@@ -325,7 +356,7 @@ class _BadHabitSection extends ConsumerWidget {
                 )
               : Column(
                   children: habits
-                      .map((h) => _BadHabitCard(habit: h))
+                      .map((h) => _BadHabitCard(key: ValueKey(h.id), habit: h))
                       .toList(),
                 ),
           loading: () => const Padding(
@@ -341,13 +372,14 @@ class _BadHabitSection extends ConsumerWidget {
 
 class _BadHabitCard extends ConsumerStatefulWidget {
   final HabitModel habit;
-  const _BadHabitCard({required this.habit});
+  const _BadHabitCard({super.key, required this.habit});
 
   @override
   ConsumerState<_BadHabitCard> createState() => _BadHabitCardState();
 }
 
 class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
+  Timer? _timer;
   BadHabitSession? _session;
   int _best = 0;
   bool _loading = true;
@@ -358,29 +390,50 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
     super.initState();
     _live = Duration.zero;
     _load();
-    _tick();
   }
-
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+  @override
+  void didUpdateWidget(covariant _BadHabitCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _load(); // reload kalau widget update
+  }
   Future<void> _load() async {
+    
     final repo = ref.read(badHabitRepositoryProvider);
     final session = await repo.getCurrentSession(widget.habit.id);
     final best = await repo.getBestRecord(widget.habit.id);
-    if (mounted) setState(() {
-      _session = session;
-      _live = session?.currentDuration ?? Duration.zero;
-      _best = best;
-      _loading = false;
+    if (mounted) {
+      setState(() {
+        _session = session;
+       _live = session == null
+        ? Duration.zero
+        : DateTime.now().difference(session.startedAt.toLocal());
+        _best = best;
+        _loading = false;
+      });
+      _startTimer();
+    }
+  }
+  
+  void _startTimer() {
+    _timer?.cancel();
+
+    if (_session == null) return; // 🔥 penting
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final diff = DateTime.now()
+          .difference(_session!.startedAt.toLocal());
+      if (mounted) {
+        setState(() {
+          _live = diff;
+        });
+      }
     });
   }
-
-  void _tick() {
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() => _live = _session?.currentDuration ?? Duration.zero);
-      _tick();
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final color = widget.habit.color;
@@ -395,10 +448,8 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
             ? '${hours}j ${minutes}m bersih'
             : '${minutes}m bersih';
 
-    // Milestone berikutnya
-    final nextMilestone = ref
-        .read(badHabitRepositoryProvider)
-        .getNextMilestone(days);
+    final nextMilestone =
+        ref.read(badHabitRepositoryProvider).getNextMilestone(days);
     double milestoneProgress = 0;
     if (nextMilestone != null) {
       final prev = _prevMilestone(nextMilestone);
@@ -414,10 +465,7 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
         child: InkWell(
           onTap: () => context.push('/bad-habit/${widget.habit.id}'),
           onLongPress: () {
-              context.push(
-              '/edit-bad-habit',
-              extra: widget.habit,
-            );
+            context.push('/edit-bad-habit', extra: widget.habit);
           },
           borderRadius: BorderRadius.circular(16),
           child: Padding(
@@ -426,7 +474,8 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
               children: [
                 Row(
                   children: [
-                    EmojiBox(emoji: widget.habit.icon, color: color, size: 46),
+                    EmojiBox(
+                        emoji: widget.habit.icon, color: color, size: 46),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -438,7 +487,15 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                                   fontSize: 15)),
                           const SizedBox(height: 4),
                           _loading
-                              ? const SizedBox(height: 14)
+                              ? SizedBox(
+                                  width: 80,
+                                  height: 10,
+                                  child: LinearProgressIndicator(
+                                    color: color.withValues(alpha: 0.4),
+                                    backgroundColor:
+                                        color.withValues(alpha: 0.1),
+                                  ),
+                                )
                               : Row(
                                   children: [
                                     Icon(Icons.timer_outlined,
@@ -454,7 +511,6 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                         ],
                       ),
                     ),
-                    // Rekor
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -463,8 +519,7 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                         Text(
                           'Rekor: $_best hr',
                           style: TextStyle(
-                              fontSize: 11,
-                              color: cs.onSurfaceVariant),
+                              fontSize: 11, color: cs.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -473,7 +528,6 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                         color: cs.onSurfaceVariant),
                   ],
                 ),
-                // Progress bar menuju milestone
                 if (nextMilestone != null) ...[
                   const SizedBox(height: 10),
                   Row(
@@ -485,7 +539,7 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                             value: milestoneProgress,
                             minHeight: 6,
                             backgroundColor:
-                                color.withOpacity(0.15),
+                                color.withValues(alpha: 0.15),
                             valueColor:
                                 AlwaysStoppedAnimation<Color>(color),
                           ),
@@ -495,8 +549,7 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
                       Text(
                         'Target: $nextMilestone hr',
                         style: TextStyle(
-                            fontSize: 10,
-                            color: cs.onSurfaceVariant),
+                            fontSize: 10, color: cs.onSurfaceVariant),
                       ),
                     ],
                   ),
@@ -514,6 +567,7 @@ class _BadHabitCardState extends ConsumerState<_BadHabitCard> {
     final idx = milestones.indexOf(next);
     return idx > 0 ? milestones[idx - 1] : 0;
   }
+  
 }
 
 // ── SHARED WIDGETS ───────────────────────────────────────────
@@ -568,7 +622,8 @@ class _EmptyCard extends StatelessWidget {
             Icon(icon, color: color, size: 28),
             const SizedBox(width: 12),
             Text(message,
-                style: TextStyle(color: color, fontWeight: FontWeight.w500)),
+                style:
+                    TextStyle(color: color, fontWeight: FontWeight.w500)),
           ],
         ),
       ),
@@ -594,10 +649,10 @@ class DashedBorderCard extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.05),
+          color: color.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-              color: color.withOpacity(0.35),
+              color: color.withValues(alpha: 0.35),
               width: 1.5,
               style: BorderStyle.solid),
         ),
@@ -614,8 +669,9 @@ class _ErrorCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: Text('Error: $message',
-          style: const TextStyle(color: Colors.red)),
+      child:
+          Text('Error: $message', style: const TextStyle(color: Colors.red)),
     );
   }
 }
+

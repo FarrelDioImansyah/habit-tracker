@@ -18,7 +18,7 @@ class _AddBadHabitScreenState extends ConsumerState<AddBadHabitScreen> {
   final _reasonCtrl = TextEditingController();
   String _emoji = '🚬';
   Color _color = HabitPresetColors.bad.first;
-  DateTime _startedAt = DateTime.now();
+  DateTime _startedAt = DateTime.now().toUtc();
   bool _saving = false;
 
   @override

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/models/habit_model.dart';
 import '../../../shared/widgets/app_icons.dart';
 import '../repositories/bad_habit_repository.dart';
+import 'dart:async';
 
 class BadHabitDetailScreen extends ConsumerStatefulWidget {
   final String habitId;
@@ -24,12 +25,16 @@ class _BadHabitDetailScreenState extends ConsumerState<BadHabitDetailScreen> {
   int _totalRelapses = 0;
   bool _loading = true;
   Duration _live = Duration.zero;
-
+  
   @override
   void initState() {
     super.initState();
     _load();
-    _tick();
+  }
+  @override
+    void dispose() {
+      _timer?.cancel();
+      super.dispose();
   }
 
   Future<void> _load() async {
@@ -52,31 +57,51 @@ class _BadHabitDetailScreenState extends ConsumerState<BadHabitDetailScreen> {
         _history = history;
         _loading = false;
       });
+      
+      _startTimer();
+
     }
   }
 
-  void _tick() {
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() => _live = _session?.currentDuration ?? Duration.zero);
-      _tick();
-    });
-  }
+  Timer? _timer;
 
   Future<void> _doRelapse(String? note) async {
     final repo = ref.read(badHabitRepositoryProvider);
-    await repo.recordRelapse(widget.habitId, note: note);
-    await _load();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Timer direset. Kamu pasti bisa lebih baik! 💪'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
 
+    // 🔥 STOP TIMER LAMA
+    _timer?.cancel();
+
+    await repo.recordRelapse(widget.habitId, note: note);
+    // Reset data global
+    
+    ref.invalidate(badHabitsProvider);
+    
+    // 🔥 LOAD SESSION BARU
+    await _load();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Timer direset. Kamu pasti bisa lebih baik! 💪'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+  void _startTimer() {
+    _timer?.cancel(); // 🔥 stop lama
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_session == null) return;
+
+      final diff = DateTime.now().toUtc()
+        .difference(_session!.startedAt);
+
+      setState(() {
+        _live = diff;
+      });
+    });
+  }
   void _showRelapseDialog() {
     final noteController = TextEditingController();
     showDialog(
@@ -122,6 +147,9 @@ class _BadHabitDetailScreenState extends ConsumerState<BadHabitDetailScreen> {
               Navigator.pop(ctx);
               final note = noteController.text.trim();
               await _doRelapse(note.isEmpty ? null : note);
+              if (mounted) {
+                context.go('/home'); // atau AppRoutes.home
+              }
             },
             style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade600),
