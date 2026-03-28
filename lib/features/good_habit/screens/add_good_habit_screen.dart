@@ -18,6 +18,8 @@ class _AddGoodHabitScreenState extends ConsumerState<AddGoodHabitScreen> {
   Color _color = HabitPresetColors.good.first;
   String _frequency = 'daily';
   bool _saving = false;
+  final _targetCtrl = TextEditingController();
+  String _unit = 'kali';
 
   @override
   void dispose() {
@@ -26,30 +28,58 @@ class _AddGoodHabitScreenState extends ConsumerState<AddGoodHabitScreen> {
   }
 
   Future<void> _save() async {
-    if (_nameCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nama habit tidak boleh kosong')),
-      );
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await ref.read(goodHabitRepositoryProvider).addHabit(
-            name: _nameCtrl.text.trim(),
-            icon: _emoji,
-            color:
-                '#${_color.value.toRadixString(16).padLeft(8, '0').substring(2)}',
-            frequency: _frequency,
-          );
-      ref.invalidate(goodHabitsProvider);
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-    setState(() => _saving = false);
+  print('SIMPAN: ${_nameCtrl.text} → ${_targetCtrl.text}');
+
+  if (_nameCtrl.text.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Nama habit tidak boleh kosong')),
+    );
+    return;
+  }
+
+int? targetValue;
+
+if (_targetCtrl.text.trim().isEmpty) {
+  targetValue = null;
+} else {
+  final value = int.parse(_targetCtrl.text);
+
+  if (value == 1) {
+    targetValue = null; // 🔥 AUTO JADI CHECK MODE
+  } else {
+    targetValue = value;
+  }
+}
+  setState(() => _saving = true);
+
+  try {
+    await ref.read(goodHabitRepositoryProvider).addHabit(
+      name: _nameCtrl.text.trim(),
+      icon: _emoji,
+      color:
+          '#${_color.value.toRadixString(16).padLeft(8, '0').substring(2)}',
+      frequency: _frequency,
+      targetValue: targetValue,
+      unit: _unit,
+    );
+
+    ref.invalidate(goodHabitsProvider);
+
+    if (!mounted) return;
+    Navigator.pop(context);
+
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Error: $e')));
+  }
+
+  if (!mounted) return;
+  setState(() => _saving = false);
+
+  // ✅ CLEAR DI SINI (SETELAH SEMUA SELESAI)
+  _targetCtrl.clear();
+  _nameCtrl.clear();
   }
 
   @override
@@ -164,7 +194,35 @@ class _AddGoodHabitScreenState extends ConsumerState<AddGoodHabitScreen> {
               onPick: (c) => setState(() => _color = c),
             ),
             const SizedBox(height: 32),
+            // 🔥 TAMBAHAN BARU (TARGET)
+            _Label('Target (opsional)'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _targetCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                hintText: 'Contoh: 8 (kosongkan kalau tidak pakai target)',
+                prefixIcon: Icon(Icons.flag_outlined),
+              ),
+            ),
 
+            const SizedBox(height: 16),
+
+            // 🔥 SATUAN
+            _Label('Satuan'),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _unit,
+              items: ['kali', 'menit', 'gelas']
+                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                  .toList(),
+              onChanged: (val) => setState(() => _unit = val!),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.straighten),
+              ),
+            ),
+
+            const SizedBox(height: 32),
             // Tombol simpan
             SizedBox(
               width: double.infinity,

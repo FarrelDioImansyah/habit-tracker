@@ -19,10 +19,27 @@ final checkedTodayProvider =
 });
 
 final currentStreakProvider =
-    FutureProvider.family<int, String>((ref, habitId) {
-  return ref.watch(goodHabitRepositoryProvider).getCurrentStreak(habitId);
-});
+    FutureProvider.family<int, HabitModel>((ref, habit) {
+  final repo = ref.watch(goodHabitRepositoryProvider);
 
+  if (habit.frequency == HabitFrequency.weekly) {
+    final target = habit.targetValue ?? 1;
+    return repo.getWeeklyStreak(habit.id, target);
+  }
+
+  return repo.getCurrentStreak(habit.id);
+});
+final progressProvider =
+    FutureProvider.family<int, String>((ref, habitId) {
+  return ref
+      .watch(goodHabitRepositoryProvider)
+      .getTodayProgress(habitId);
+});
+final todayHabitDataProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  final repo = ref.watch(goodHabitRepositoryProvider);
+  return repo.getTodayHabitData();
+});
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -105,10 +122,14 @@ class _ProgressRing extends ConsumerWidget {
     if (habits.isEmpty) return const SizedBox(width: 56, height: 56);
 
     // Hitung berapa yang sudah check-in hari ini
+    final todayDataAsync = ref.watch(todayHabitDataProvider);
+    final todayData = todayDataAsync.value ?? {};
+
     int doneCount = 0;
+
     for (final h in habits) {
-      final checked = ref.watch(checkedTodayProvider(h.id));
-      if (checked.value == true) doneCount++;
+      final data = todayData[h.id];
+      if (data?['completed'] == true) doneCount++;
     }
     final progress = habits.isEmpty ? 0.0 : doneCount / habits.length;
 
@@ -159,26 +180,49 @@ class _GoodHabitSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionTitle(
+        const _SectionTitle(
           icon: Icons.check_circle_outline_rounded,
           label: 'Kebiasaan Baik',
-          color: const Color(0xFF1D9E75),
+          color: Color(0xFF1D9E75),
         ),
         async.when(
           data: (habits) => habits.isEmpty
+          
               ? _EmptyCard(
                   icon: Icons.add_circle_outline_rounded,
                   message: 'Tambah kebiasaan baik pertamamu',
                   color: const Color(0xFF1D9E75),
                   onTap: () => context.push(AppRoutes.addGoodHabit),
                 )
-              : Column(
-                  // FIX BUG 1: key unik per habit.id
-                  // Flutter paksa recreate widget saat habit baru ditambah
-                  // sehingga state _checked tidak bocor dari widget lama
-                  children: habits
-                      .map((h) => _GoodHabitCard(key: ValueKey(h.id), habit: h))
-                      .toList(),
+              : Builder(
+                  builder: (_) {
+                    final daily = habits
+                        .where((h) => h.frequency == HabitFrequency.daily)
+                        .toList();
+
+                    final weekly = habits
+                        .where((h) => h.frequency == HabitFrequency.weekly)
+                        .toList();
+
+                    return Column(
+                      children: [
+                        // 🔥 DAILY
+                        if (daily.isNotEmpty) ...[
+                          _SubTitle('Harian'),
+                          ...daily.map((h) =>
+                              _GoodHabitCard(key: ValueKey(h.id), habit: h)),
+                        ],
+
+                        // 🔥 WEEKLY
+                        if (weekly.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _SubTitle('Mingguan'),
+                          ...weekly.map((h) =>
+                              _GoodHabitCard(key: ValueKey(h.id), habit: h)),
+                        ],
+                      ],
+                    );
+                  },
                 ),
           loading: () => const Padding(
             padding: EdgeInsets.all(20),
@@ -192,6 +236,7 @@ class _GoodHabitSection extends ConsumerWidget {
 }
 
 class _GoodHabitCard extends ConsumerWidget {
+  
   final HabitModel habit;
   // FIX: Ubah dari StatefulWidget ke ConsumerWidget
   // State _checked sekarang dari provider.family → tidak bocor antar habit
@@ -204,12 +249,21 @@ class _GoodHabitCard extends ConsumerWidget {
 
     // FIX BUG 1 & 3: watch provider.family per habitId
     // Otomatis rebuild saat invalidate dipanggil (setelah kembali dari detail)
-    final checkedAsync = ref.watch(checkedTodayProvider(habit.id));
-    final streakAsync = ref.watch(currentStreakProvider(habit.id));
-
-    final checked = checkedAsync.value ?? false;
+    final streakAsync = ref.watch(currentStreakProvider(habit));    
+    final todayDataAsync = ref.watch(todayHabitDataProvider);
+    final todayData = todayDataAsync.value ?? {};
+    final data = todayData[habit.id];
+    final progress = data?['progress'] ?? 0;
+    final checked = data?['completed'] ?? false;
     final streak = streakAsync.value ?? 0;
-    final loading = checkedAsync.isLoading;
+    final target = habit.targetValue;
+    final unit = habit.unit ?? '';
+    final repo = ref.read(goodHabitRepositoryProvider);
+
+    final isTimer = unit == 'menit' || unit == 'jam';
+    final isCount = target != null && target > 0 && !isTimer;
+    final isCheck = target == null;
+
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -222,9 +276,8 @@ class _GoodHabitCard extends ConsumerWidget {
             // FIX BUG 3: navigasi ke detail lalu invalidate saat kembali
             await context.push('/good-habit/${habit.id}');
             // Invalidate setelah pop agar langsung refresh status centang
-            ref.invalidate(checkedTodayProvider(habit.id));
-            ref.invalidate(currentStreakProvider(habit.id));
-            ref.invalidate(goodHabitsProvider);
+            ref.invalidate(todayHabitDataProvider);
+            ref.invalidate(currentStreakProvider(habit));
           },
           onLongPress: () {
             context.push('/edit-good-habit', extra: habit);
@@ -232,47 +285,36 @@ class _GoodHabitCard extends ConsumerWidget {
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(14),
-            child: Row(
+            child: 
+            Row(
               children: [
                 EmojiBox(emoji: habit.icon, color: color, size: 46),
                 const SizedBox(width: 12),
+
+                // 🔥 KIRI (TEXT + PROGRESS)
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        habit.name,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                          // FIX BUG 3: decoration langsung dari checked provider
-                          decoration: checked
-                              ? TextDecoration.lineThrough
-                              : null,
-                          color: checked
-                              ? cs.onSurfaceVariant
-                              : cs.onSurface,
-                        ),
-                      ),
+                      Text(habit.name),
                       const SizedBox(height: 4),
+                      //tempat untuk streak
                       Row(
                         children: [
                           Icon(Icons.local_fire_department_rounded,
                               size: 14, color: Colors.orange),
-                          const SizedBox(width: 3),
-                          // Tampilkan loading kecil jika streak belum siap
+                          const SizedBox(width: 4),
+
                           streakAsync.isLoading
-                              ? SizedBox(
-                                  width: 40,
+                              ? const SizedBox(
+                                  width: 30,
                                   height: 10,
-                                  child: LinearProgressIndicator(
-                                    color: color.withValues(alpha: 0.4),
-                                    backgroundColor:
-                                        color.withValues(alpha: 0.1),
-                                  ),
+                                  child: LinearProgressIndicator(),
                                 )
                               : Text(
-                                  '$streak hari streak',
+                                  habit.frequency == HabitFrequency.weekly
+                                    ? '$streak minggu'
+                                    : '$streak hari',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: cs.onSurfaceVariant,
@@ -280,50 +322,71 @@ class _GoodHabitCard extends ConsumerWidget {
                                 ),
                         ],
                       ),
+                      if (target != null && target > 0) ...[
+                        const SizedBox(height: 6),
+                        LinearProgressIndicator(
+                          value: target == 0 ? 0 : progress / target,
+                          minHeight: 6,
+                        ),
+                        const SizedBox(height: 4),
+                        Text('$progress / $target ${habit.unit ?? ''}'),
+                      ],
                     ],
                   ),
                 ),
-                // Tombol centang
-                GestureDetector(
-                  onTap: loading
-                      ? null
-                      : () async {
-                          final repo =
-                              ref.read(goodHabitRepositoryProvider);
+
+                // 🔥 KANAN (FIX DI SINI)
+                Row(
+                  children: [
+                    if (isCheck)
+                      GestureDetector(
+                        onTap: () async {
                           if (checked) {
                             await repo.undoCheckIn(habit.id);
                           } else {
                             await repo.checkIn(habit.id);
                           }
-                          // Invalidate provider → otomatis rebuild
-                          ref.invalidate(checkedTodayProvider(habit.id));
-                          ref.invalidate(currentStreakProvider(habit.id));
-                          ref.invalidate(goodHabitsProvider);
+
+                           ref.invalidate(todayHabitDataProvider); // 🔥 INI
+                           ref.invalidate(currentStreakProvider(habit));
                         },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: checked ? color : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: color, width: 2),
-                    ),
-                    child: loading
-                        ? Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: color),
-                          )
-                        : Icon(
-                            Icons.check_rounded,
-                            color: checked ? Colors.white : color,
-                            size: 22,
+                        child: Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: color, width: 2),
+                            color: checked ? color : Colors.transparent,
                           ),
-                  ),
+                          child: Icon(
+                            Icons.check,
+                            color: checked ? Colors.white : color,
+                          ),
+                        ),
+                      ),
+
+                    if (isCount)
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () async {
+                          await repo.incrementProgress(habit.id, target);
+
+                          ref.invalidate(todayHabitDataProvider); // 🔥 INI
+                          ref.invalidate(currentStreakProvider(habit));
+                        },
+                      ),
+
+                    if (isTimer)
+                      IconButton(
+                        icon: const Icon(Icons.timer_outlined),
+                        onPressed: () {
+                          // nanti kita isi timer
+                        },
+                      ),               
+                  ],
                 ),
               ],
-            ),
+            )
           ),
         ),
       ),
@@ -674,4 +737,21 @@ class _ErrorCard extends StatelessWidget {
     );
   }
 }
+class _SubTitle extends StatelessWidget {
+  final String text;
+  const _SubTitle(this.text);
 
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontWeight: FontWeight.w700,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+}

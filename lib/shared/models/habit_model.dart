@@ -18,6 +18,8 @@ class HabitModel {
   final String? reason;        // khusus bad habit: alasan berhenti
   final bool isPaused;
   final DateTime createdAt;
+  final int? targetValue;
+  final String? unit;
 
   const HabitModel({
     required this.id,
@@ -30,6 +32,8 @@ class HabitModel {
     this.groupId,
     this.reason,
     this.isPaused = false,
+    this.targetValue,
+    this.unit,
     required this.createdAt,
   });
 
@@ -50,6 +54,8 @@ class HabitModel {
       groupId: json['group_id'] as String?,
       reason: json['reason'] as String?,
       isPaused: json['is_paused'] as bool? ?? false,
+      targetValue: json['target_value'] as int?,
+      unit: json['unit'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
     );
   }
@@ -67,6 +73,8 @@ class HabitModel {
       'group_id': groupId,
       'reason': reason,
       'is_paused': isPaused,
+      'target_value': targetValue,
+      'unit': unit,
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -103,6 +111,8 @@ class HabitLog {
   final String userId;
   final DateTime completedAt;
   final String? note;
+  final bool isCompleted;
+  final int? progress;
 
   const HabitLog({
     required this.id,
@@ -110,6 +120,8 @@ class HabitLog {
     required this.userId,
     required this.completedAt,
     this.note,
+    required this.isCompleted,
+    this.progress // 🔥 TAMBAH INI
   });
 
   factory HabitLog.fromJson(Map<String, dynamic> json) {
@@ -119,6 +131,8 @@ class HabitLog {
       userId: json['user_id'] as String,
       completedAt: DateTime.parse(json['completed_at'] as String),
       note: json['note'] as String?,
+      isCompleted: json['is_completed'] ?? false,
+      progress: json['progress'] // 🔥 INI KUNCI
     );
   }
 
@@ -129,6 +143,7 @@ class HabitLog {
       'user_id': userId,
       'completed_at': completedAt.toIso8601String(),
       'note': note,
+      'is_completed': isCompleted, // 🔥 TAMBAH INI
     };
   }
 }

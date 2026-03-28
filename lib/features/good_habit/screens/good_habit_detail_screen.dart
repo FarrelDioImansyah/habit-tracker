@@ -44,7 +44,7 @@ class _GoodHabitDetailScreenState
     // Dengan ini saat kembali ke home, status centang langsung update
     ref.invalidate(goodHabitsProvider);
     ref.invalidate(checkedTodayProvider(_habit!.id));
-    ref.invalidate(currentStreakProvider(_habit!.id));
+    ref.invalidate(currentStreakProvider(_habit!));
     if (mounted) setState(() {});
   }
 
@@ -73,7 +73,7 @@ class _GoodHabitDetailScreenState
                 await repo.deleteHabit(habit.id);
                 ref.invalidate(goodHabitsProvider);
                 ref.invalidate(checkedTodayProvider(habit.id));
-                ref.invalidate(currentStreakProvider(habit.id));
+                ref.invalidate(currentStreakProvider(habit));
                 if (!mounted) return;
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
